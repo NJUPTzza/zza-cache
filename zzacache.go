@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"zzacache/singleflight"
 )
 
 // Getter 接口定义了方法签名 Get(key string) ([]byte, error)
@@ -36,6 +37,7 @@ type Group struct {
 	// 缓存实例（内部类型 cache），存储实际的缓存数据
 	mainCache cache
 	peers     PeerPicker
+	loader    *singleflight.Group // 使用 singleflight.Group 确保每个 key 只被获取（fetch）一次
 }
 
 // 通过 sync.RWMutex 实现并发安全的全局注册表，存储所有已创建的 Group 实例
@@ -54,6 +56,7 @@ func NewGroup(name string, cacheBytes int64, getter Getter) *Group {
 		name:      name,
 		getter:    getter,
 		mainCache: cache{cacheBytes: cacheBytes},
+		loader:    &singleflight.Group{},
 	}
 	groups[name] = g
 	return g
@@ -87,15 +90,23 @@ func (g *Group) Get(key string) (ByteView, error) {
 
 // load 使用 PickPeer() 方法选择节点，若非本机节点，则调用 getFromPeer() 从远程获取。若是本机节点或失败，则回退到 getLocally()
 func (g *Group) load(key string) (value ByteView, err error) {
-	if g.peers != nil {
-		if peer, ok := g.peers.PickPeer(key); ok {
-			if value, err = g.getFromPeer(peer, key); err == nil {
-				return value, nil
+	// 确保了并发场景下针对相同的 key，load 过程只会调用一次
+	view, err := g.loader.Do(key, func() (interface{}, error) {
+		if g.peers != nil {
+			if peer, ok := g.peers.PickPeer(key); ok {
+				if value, err = g.getFromPeer(peer, key); err == nil {
+					return value, nil
+				}
+				log.Println("[GeeCache] Failed to get from peer", err)
 			}
-			log.Println("[GeeCache] Failed to get from peer", err)
 		}
+		return g.getLocally(key)
+	})
+
+	if err == nil {
+		return view.(ByteView), nil
 	}
-	return g.getLocally(key)
+	return
 }
 
 // getLocally 调用用户回调函数 g.getter.Get() 获取源数据
