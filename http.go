@@ -2,6 +2,7 @@ package zzacache
 
 import (
 	"fmt"
+	"github.com/golang/protobuf/proto"
 	"io"
 	"log"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"zzacache/consistenthash"
+	pb "zzacache/zzacachepb"
 )
 
 const (
@@ -41,7 +43,8 @@ func (p *HTTPPool) Log(format string, v ...interface{}) {
 	log.Printf("[Server %s] %s", p.self, fmt.Sprintf(format, v...))
 }
 
-func (p *HTTPPool) ServerHTTP(w http.ResponseWriter, r *http.Request) {
+// ServeHTTP ServeHTTP 中使用 proto.Marshal() 编码 HTTP 响应
+func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 首先判断访问路径的前缀是否是 basePath，不是返回错误
 	if !strings.HasPrefix(r.URL.Path, p.basePath) {
 		panic("HTTPPool serving unexpected path: " + r.URL.Path)
@@ -66,6 +69,8 @@ func (p *HTTPPool) ServerHTTP(w http.ResponseWriter, r *http.Request) {
 	// 使用 group.Get(key) 获取缓存数据
 	key := parts[1]
 	view, err := group.Get(key)
+
+	body, err := proto.Marshal(&pb.Response{Value: view.ByteSlice()})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -73,7 +78,7 @@ func (p *HTTPPool) ServerHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// 最终使用 w.Write() 将缓存值作为 httpResponse 的 body 返回
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Write(view.ByteSlice())
+	w.Write(body)
 }
 
 // ===================================================================
@@ -83,29 +88,37 @@ type httpGetter struct {
 	baseURL string
 }
 
-func (h *httpGetter) Get(group string, key string) ([]byte, error) {
+// Get 中使用 proto.Unmarshal() 解码 HTTP 响应
+func (h *httpGetter) Get(in *pb.Request, out *pb.Response) error {
 	// Sprintf 拼接字符串
 	// url.QueryEscape 检查字符串是否可以作为 URL 的一部分
 	// baseURL 表示将要访问的远程节点的地址，例如 http://example.com/_zzacache/
-	u := fmt.Sprintf("%v%v/%v", h.baseURL, url.QueryEscape(group), url.QueryEscape(key))
+	u := fmt.Sprintf(
+		"%v%v/%v",
+		h.baseURL,
+		url.QueryEscape(in.GetGroup()),
+		url.QueryEscape(in.GetKey()))
 
 	// 使用 http.Get() 方式获取返回值，并转换为 []bytes 类型
 	res, err := http.Get(u)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server returned: %v", res.Status)
+		return fmt.Errorf("server returned: %v", res.Status)
 	}
 
 	bytes, err := io.ReadAll(res.Body)
 	if err != nil {
-		return nil, fmt.Errorf("reading response body: %v", err)
+		return fmt.Errorf("reading response body: %v", err)
 	}
 
-	return bytes, nil
+	if err = proto.Unmarshal(bytes, out); err != nil {
+		return fmt.Errorf("decoding response body: %v", err)
+	}
+	return nil
 }
 
 // 接口实现检查

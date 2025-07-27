@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/ZaaCache.iml" filepath="$PROJECT_DIR$/.idea/ZaaCache.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/zzacache.iml" filepath="$PROJECT_DIR$/.idea/zzacache.iml" />
     </modules>
   </component>
 </project>

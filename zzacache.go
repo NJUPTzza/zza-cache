@@ -5,6 +5,7 @@ import (
 	"log"
 	"sync"
 	"zzacache/singleflight"
+	pb "zzacache/zzacachepb"
 )
 
 // Getter 接口定义了方法签名 Get(key string) ([]byte, error)
@@ -135,9 +136,14 @@ func (g *Group) RegisterPeers(peers PeerPicker) {
 
 // getFromPeer 使用实现了 PeerGetter 接口的 httpGetter 从访问远程节点，获取缓存
 func (g *Group) getFromPeer(peer PeerGetter, key string) (ByteView, error) {
-	bytes, err := peer.Get(g.name, key)
+	req := &pb.Request{
+		Group: g.name,
+		Key:   key,
+	}
+	res := &pb.Response{}
+	err := peer.Get(req, res)
 	if err != nil {
 		return ByteView{}, err
 	}
-	return ByteView{b: bytes}, nil
+	return ByteView{b: res.Value}, nil
 }
